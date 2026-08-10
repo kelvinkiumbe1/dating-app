@@ -8,19 +8,22 @@ matching, plus a **console client** that plays against a simulated deck of LLM-d
 | `DatingApp.Api` | ASP.NET Core + EF Core/SQLite backend — accounts, discovery, matching, messaging, safety |
 | `ConsoleApp1` | Standalone terminal client with hardcoded characters whose replies come from Claude |
 | `ConsoleMatch.Core` | Compatibility scoring and geo-distance, shared by both |
-| `*.Tests` | 54 tests — 29 API integration tests over real HTTP, 25 unit tests |
+| `*.Tests` | 64 tests — 39 API integration tests over real HTTP, 25 unit tests |
 
 ## Running the API
 
-A JWT signing key is required outside Development, so the app refuses to boot without one
-rather than falling back to something insecure:
-
 ```bash
-JWT__KEY="a-long-random-signing-key" dotnet run --project DatingApp.Api
-curl http://localhost:5199/health          # {"status":"ok"}
+dotnet run --project DatingApp.Api
+curl http://localhost:5199/health          # Healthy
 ```
 
-The SQLite database and photo directory are created on first run.
+Development defaults to SQLite and local disk, so no external services are needed — the
+database and photo directory are created on first run.
+
+Production uses Postgres and S3-compatible object storage, and the app **refuses to boot**
+without a JWT signing key or object storage configured, rather than signing tokens with a
+throwaway key or writing photos to a disk that gets wiped. See **[DEPLOY.md](DEPLOY.md)** for
+free-tier deployment (Fly.io + Neon + Cloudflare R2) and the full configuration reference.
 
 ## API reference
 
@@ -77,7 +80,7 @@ Compatibility is the Jaccard index over shared interests; distance is haversine.
 
 | Method | Route | Notes |
 | --- | --- | --- |
-| `POST` | `/me/photos` | Upload (JPEG/PNG/WebP, 5MB, max 6). Filenames are server-generated |
+| `POST` | `/me/photos` | Upload (JPEG/PNG/WebP, 5MB, max 6). Magic bytes must match the declared type; storage keys are server-generated |
 | `GET` | `/photos/{id}` | Serve a photo |
 | `DELETE` | `/me/photos/{id}` | Delete; promotes another photo to primary |
 
@@ -108,8 +111,7 @@ HTTP pipeline — routing, auth, model binding, and EF — rather than calling m
 ## Not built yet
 
 Honest list of what a production dating app would still need: email/phone verification, a
-moderation queue and admin tooling for the reports this API collects, push notifications and
-WebSocket delivery for live messages, image moderation and EXIF stripping, rate limiting, refresh
-tokens and revocation, HTTPS/deployment configuration, a real database (Postgres) instead of
-SQLite, and a web or mobile front end. There is no client for the API yet — only the console
-simulation.
+moderation queue and admin tooling for the reports this API already collects, push notifications
+and WebSocket delivery for live messages, image moderation and EXIF stripping, refresh tokens and
+revocation, automated database backups, and a web or mobile front end. **There is no client for
+the API yet** — the console app is a separate single-player simulation, not a consumer of it.

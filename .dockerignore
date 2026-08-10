@@ -1,0 +1,14 @@
+**/bin/
+**/obj/
+**/.vs/
+**/uploads/
+**/*.db
+**/*.db-shm
+**/*.db-wal
+.git/
+.github/
+**/appsettings.Development.json
+**/consolematch-state.json
+ConsoleApp1/
+ConsoleApp1.Tests/
+DatingApp.Api.Tests/

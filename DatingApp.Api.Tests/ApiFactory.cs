@@ -22,6 +22,11 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseSetting("Jwt:Key", "test-signing-key-that-is-long-enough-to-be-valid-hmac-sha256");
         builder.UseEnvironment("Development");
 
+        // Every test shares one loopback address, so production per-IP limits would
+        // reject the suite. Raised here rather than disabled, so the limiter still runs.
+        builder.UseSetting("RateLimiting:AuthPerMinute", "100000");
+        builder.UseSetting("RateLimiting:GlobalPerMinute", "100000");
+
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<DbContextOptions<AppDbContext>>();
