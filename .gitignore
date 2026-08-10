@@ -1,0 +1,22 @@
+## .NET build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+*.user
+*.suo
+.vs/
+
+## Test results
+TestResults/
+*.trx
+coverage*.xml
+
+## Local app state (per-machine save file)
+consolematch-state.json
+
+## Secrets
+.env
+*.env.local
