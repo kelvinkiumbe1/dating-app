@@ -1,5 +1,10 @@
-# Fly.io deployment. Rename `app` to something unique before the first deploy.
-app = "dating-app"
+# Fly.io deployment.
+# `app` must be globally unique across all of Fly; derived from the GitHub owner so it
+# very likely is. Change it if `fly apps create` reports the name is taken.
+app = "kelvinkiumbe1-dating-app"
+
+# Where the machine runs. `fly platform regions` lists the options — pick the one
+# closest to your users and change this before the first deploy.
 primary_region = "lhr"
 
 [build]

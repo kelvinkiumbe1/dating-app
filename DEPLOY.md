@@ -30,10 +30,17 @@ secret access key, and your account ID (the endpoint is
 
 ### 3. Deploy
 
+`fly.toml` is already set up with the app name `kelvinkiumbe1-dating-app` and region `lhr`.
+Change either before the first deploy if you want something different — `fly platform regions`
+lists the options.
+
 ```bash
 fly auth signup
-fly launch --no-deploy          # edit fly.toml: pick a unique app name
+fly apps create kelvinkiumbe1-dating-app
 ```
+
+Use `fly apps create`, not `fly launch` — `launch` runs its own framework detection and will
+try to rewrite the `Dockerfile` and `fly.toml` in this repo.
 
 Set the secrets (never commit these):
 
