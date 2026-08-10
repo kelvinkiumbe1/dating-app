@@ -11,4 +11,8 @@
     <PackageReference Include="Anthropic" Version="12.40.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\ConsoleMatch.Core\ConsoleMatch.Core.csproj" />
+  </ItemGroup>
+
 </Project>

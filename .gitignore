@@ -17,6 +17,12 @@ coverage*.xml
 ## Local app state (per-machine save file)
 consolematch-state.json
 
+## API runtime data — local database and user-uploaded photos
+*.db
+*.db-shm
+*.db-wal
+uploads/
+
 ## Secrets
 .env
 *.env.local

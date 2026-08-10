@@ -103,11 +103,7 @@ public class DatingApp
         user.Interests = ParseInterests(ReadLineOr(current));
     }
 
-    public static List<string> ParseInterests(string input) =>
-        input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-             .Select(i => i.ToLowerInvariant())
-             .Distinct()
-             .ToList();
+    public static List<string> ParseInterests(string input) => Core.Compatibility.ParseList(input);
 
     private List<Candidate> Remaining() =>
         Pool.Where(c => !_state.Swiped.Contains(c.Name)).ToList();

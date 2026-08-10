@@ -1,4 +1,7 @@
 <Solution>
   <Project Path="ConsoleApp1.Tests/ConsoleApp1.Tests.csproj" />
   <Project Path="ConsoleApp1/ConsoleApp1.csproj" />
+  <Project Path="ConsoleMatch.Core/ConsoleMatch.Core.csproj" />
+  <Project Path="DatingApp.Api.Tests/DatingApp.Api.Tests.csproj" />
+  <Project Path="DatingApp.Api/DatingApp.Api.csproj" />
 </Solution>

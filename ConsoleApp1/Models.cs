@@ -18,15 +18,8 @@ public class Candidate
     // Minimum compatibility (0-100) this candidate needs to like you back.
     public required int Standards { get; init; }
 
-    public int CompatibilityWith(UserProfile user)
-    {
-        if (user.Interests.Count == 0) return 0;
-        var mine = Interests.Select(i => i.ToLowerInvariant()).ToHashSet();
-        var theirs = user.Interests.Select(i => i.ToLowerInvariant()).ToHashSet();
-        var shared = mine.Intersect(theirs).Count();
-        var union = mine.Union(theirs).Count();
-        return (int)Math.Round(100.0 * shared / union);
-    }
+    public int CompatibilityWith(UserProfile user) =>
+        Core.Compatibility.Score(Interests, user.Interests);
 }
 
 public class ChatMessage
