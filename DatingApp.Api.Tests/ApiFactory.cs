@@ -4,18 +4,20 @@ using DatingApp.Api;
 using DatingApp.Api.Data;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace DatingApp.Api.Tests;
 
-/// Boots the real API against a private in-memory SQLite database, so every test
+/// Boots the real API against a private throwaway SQLite database, so every test
 /// exercises the actual HTTP pipeline: routing, auth, model binding, and EF.
 public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
-    private SqliteConnection _connection = null!;
+    public const string AdminEmail = "moderator@example.com";
+    public const string Password = "correct-horse-battery";
+
+    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"datingapp-test-{Guid.NewGuid():N}.db");
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -27,17 +29,18 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseSetting("RateLimiting:AuthPerMinute", "100000");
         builder.UseSetting("RateLimiting:GlobalPerMinute", "100000");
 
+        builder.UseSetting("Admin:Emails:0", AdminEmail);
+
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.RemoveAll<AppDbContext>();
 
-            // A single open connection keeps the in-memory database alive for the
-            // lifetime of the factory rather than dying with the first context.
-            _connection = new SqliteConnection("Data Source=:memory:");
-            _connection.Open();
-
-            services.AddDbContext<AppDbContext>(o => o.UseSqlite(_connection));
+            // A file rather than one shared in-memory connection: requests run concurrently
+            // (SignalR long polling alongside REST calls, each authenticating against the
+            // database), and a SqliteConnection is not safe to share across threads. One
+            // connection per context mirrors production. Unpooled so the file can be deleted.
+            services.AddDbContext<AppDbContext>(o => o.UseSqlite($"Data Source={_dbPath};Pooling=False"));
         });
     }
 
@@ -46,7 +49,8 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
     public new async Task DisposeAsync()
     {
         await base.DisposeAsync();
-        _connection?.Dispose();
+        foreach (var suffix in new[] { "", "-wal", "-shm" })
+            File.Delete(_dbPath + suffix);
     }
 
     /// Registers a user and returns a client already carrying their bearer token.
@@ -66,7 +70,7 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         var client = CreateClient();
         var request = new RegisterRequest(
             Email: email,
-            Password: "correct-horse-battery",
+            Password: Password,
             DisplayName: displayName,
             DateOfBirth: DateOnly.FromDateTime(DateTime.UtcNow.AddYears(-age).AddDays(-1)),
             Gender: gender,
@@ -86,8 +90,17 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
             ?? throw new InvalidOperationException("register returned no body");
 
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", auth.Token);
-        return new TestUser(auth.UserId, displayName, auth.Token, client);
+        return new TestUser(auth.UserId, displayName, auth.Token, client, auth.RefreshToken, email);
+    }
+
+    /// A client that sends the given bearer token, for checking what an old token can still do.
+    public HttpClient ClientWithToken(string token)
+    {
+        var client = CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return client;
     }
 }
 
-public record TestUser(Guid Id, string DisplayName, string Token, HttpClient Client);
+public record TestUser(
+    Guid Id, string DisplayName, string Token, HttpClient Client, string RefreshToken, string Email);

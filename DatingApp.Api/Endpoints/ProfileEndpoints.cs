@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using ConsoleMatch.Core;
 using DatingApp.Api.Data;
+using DatingApp.Api.Realtime;
+using DatingApp.Api.Storage;
 using Microsoft.EntityFrameworkCore;
 
 namespace DatingApp.Api.Endpoints;
@@ -60,11 +62,16 @@ public static class ProfileEndpoints
         });
 
         // GDPR-style hard delete: the account and everything attributable to it.
-        group.MapDelete("/", async (ClaimsPrincipal me, AppDbContext db) =>
+        group.MapDelete("/", async (
+            ClaimsPrincipal me, AppDbContext db, IPhotoStorage storage, RealtimeNotifier realtime) =>
         {
             var id = me.UserId();
-            var user = await db.Users.FirstOrDefaultAsync(u => u.Id == id);
+            var user = await db.Users.Include(u => u.Photos).FirstOrDefaultAsync(u => u.Id == id);
             if (user is null) return Results.NotFound();
+
+            var photoKeys = user.Photos.Select(p => p.FileName).ToList();
+            var activeMatches = await db.Matches
+                .Where(m => m.IsActive && (m.UserAId == id || m.UserBId == id)).ToListAsync();
 
             var matchIds = await db.Matches
                 .Where(m => m.UserAId == id || m.UserBId == id)
@@ -75,9 +82,15 @@ public static class ProfileEndpoints
             db.Swipes.RemoveRange(db.Swipes.Where(s => s.SwiperId == id || s.TargetId == id));
             db.Blocks.RemoveRange(db.Blocks.Where(x => x.BlockerId == id || x.BlockedId == id));
             db.Reports.RemoveRange(db.Reports.Where(r => r.ReporterId == id));
-            db.Users.Remove(user);   // photos cascade
+            db.Users.Remove(user);   // photo rows and refresh tokens cascade
 
             await db.SaveChangesAsync();
+
+            // The rows are gone; the image bytes in storage have to be removed separately or
+            // a "deleted" account would leave its photos behind.
+            foreach (var key in photoKeys) await storage.DeleteAsync(key);
+            foreach (var match in activeMatches) await realtime.Unmatched(match);
+
             return Results.Ok(new { deleted = true });
         });
 
@@ -91,7 +104,7 @@ public static class ProfileEndpoints
             if (blocked) return Results.NotFound();
 
             var user = await db.Users.Include(u => u.Photos).FirstOrDefaultAsync(u => u.Id == id);
-            return user is null ? Results.NotFound() : Results.Ok(user.ToPublicProfile());
+            return user is null || user.IsBanned ? Results.NotFound() : Results.Ok(user.ToPublicProfile());
         }).RequireAuthorization().WithTags("Profile");
     }
 }

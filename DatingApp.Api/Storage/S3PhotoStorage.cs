@@ -25,10 +25,12 @@ public class S3PhotoStorage : IPhotoStorage
 {
     private readonly IAmazonS3 _s3;
     private readonly string _bucket;
+    private readonly bool _https;
 
     public S3PhotoStorage(S3StorageOptions options)
     {
         _bucket = options.Bucket;
+        _https = !options.ServiceUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
 
         var config = new AmazonS3Config
         {
@@ -59,7 +61,9 @@ public class S3PhotoStorage : IPhotoStorage
             Key = key,
             InputStream = buffer,
             ContentType = contentType,
-            DisablePayloadSigning = true,   // R2 rejects streaming chunked signatures
+            // R2 rejects streaming chunked signatures. The SDK only allows unsigned payloads
+            // over TLS, so a plain-HTTP endpoint (local MinIO/SeaweedFS) keeps signing.
+            DisablePayloadSigning = _https,
         }, ct);
     }
 

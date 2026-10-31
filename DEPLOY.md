@@ -8,6 +8,9 @@ abstracted behind `IPhotoStorage`.
 The app **refuses to start** in Production if `Jwt:Key` or `Storage:S3` is missing, rather
 than silently falling back to something that loses data or signs tokens with a throwaway key.
 
+The Docker image contains both the API and the web client (built from `web/` in its own
+stage), so one deploy ships the whole app at `https://<your-app>.fly.dev/`.
+
 ## Recommended: Fly.io + Neon + Cloudflare R2
 
 | Piece | Service | Free tier |
@@ -52,10 +55,21 @@ fly secrets set \
   Storage__S3__ServiceUrl="https://<account-id>.r2.cloudflarestorage.com" \
   Storage__S3__AccessKey="<r2-access-key-id>" \
   Storage__S3__SecretKey="<r2-secret-access-key>" \
-  Cors__AllowedOrigins__0="https://your-frontend.example.com"
+  Admin__Emails__0="you@example.com"
 
 fly deploy
 curl https://<your-app>.fly.dev/health
+```
+
+Then open `https://<your-app>.fly.dev/` and sign up with the email you listed in
+`Admin__Emails__0` to get the moderation tab. The admin list is re-synced on every start,
+so removing an address and redeploying demotes that account.
+
+The web client is served from the same origin, so CORS needs no configuration. Set
+`Cors__AllowedOrigins__0` only if you host a separate front end elsewhere:
+
+```bash
+fly secrets set Cors__AllowedOrigins__0="https://your-frontend.example.com"
 ```
 
 Migrations run automatically at startup, so the schema is created on first boot.
@@ -72,7 +86,10 @@ Double underscores map to nested configuration keys.
 | `Storage__S3__Bucket` / `AccessKey` / `SecretKey` | yes | Startup fails without these outside Development |
 | `Storage__S3__ServiceUrl` | for R2 | Omit for real AWS S3 |
 | `Storage__S3__Region` | no | Defaults to `auto` (correct for R2) |
-| `Cors__AllowedOrigins__0`, `__1`, … | for browsers | Explicit origins only; no wildcard, since the API is credentialed |
+| `Admin__Emails__0`, `__1`, … | no | Accounts with these emails get the moderation queue. Synced at startup |
+| `Jwt__AccessTokenMinutes` | no | Default 15 |
+| `Jwt__RefreshTokenDays` | no | Default 30 |
+| `Cors__AllowedOrigins__0`, `__1`, … | no | Only for a front end on another origin. Explicit origins only, no wildcard |
 | `RateLimiting__AuthPerMinute` | no | Default 10 per IP on `/auth/*` |
 | `RateLimiting__GlobalPerMinute` | no | Default 300 per user or IP |
 
@@ -86,22 +103,40 @@ environment variables in the dashboard.
 ## Local development
 
 ```bash
-dotnet run --project DatingApp.Api
+dotnet run --project DatingApp.Api -- --seed     # API on :5199 with demo users
+cd web && npm run dev                             # client on :5173/app/
 ```
 
 Development defaults to SQLite and local disk storage, so no external services are needed.
+See the README for the demo accounts.
+
+### Database migrations
+
+Postgres schema changes ship as EF Core migrations in `DatingApp.Api/Data/Migrations` and
+are applied automatically at startup. After changing an entity, generate one against the
+Postgres provider (the database doesn't need to exist):
+
+```bash
+dotnet tool install --global dotnet-ef
+ASPNETCORE_ENVIRONMENT=Development Database__Provider=postgres \
+ConnectionStrings__Default="Host=localhost;Database=design;Username=x;Password=x" \
+  dotnet ef migrations add <Name> --project DatingApp.Api --output-dir Data/Migrations
+```
 
 ## Before real users
 
 Free-tier hosting gives no backups, no uptime guarantee, and no data-residency control —
 fine for a demo, not for strangers' real dating profiles. Still outstanding:
 
-- Email/phone verification, and an admin surface to review the reports the API already collects
-- Push notifications and WebSocket delivery for live messages
-- Image moderation and EXIF stripping (uploads currently keep their metadata, including GPS)
-- Refresh tokens and revocation — tokens are valid for 24 hours with no way to invalidate one
+- Email/phone verification
+- Push notifications for when the app is closed (live delivery works only while a tab is open)
+- Image moderation (nudity/CSAM scanning) before photos go live; metadata is already stripped
 - Automated database backups
-- A front end; there is no client for this API yet
+
+Live chat runs on SignalR over WebSockets, which Fly supports with no extra configuration.
+On more than one machine, a message would only reach users connected to the same machine.
+Add a SignalR backplane (Redis, or Azure SignalR Service) before scaling out, or keep
+`min_machines_running = 1` and one machine as `fly.toml` does now.
 
 `app.UseForwardedHeaders` currently trusts any proxy, which is required behind Fly/Render but
 means a directly-exposed instance could have `X-Forwarded-For` spoofed to dodge per-IP limits.

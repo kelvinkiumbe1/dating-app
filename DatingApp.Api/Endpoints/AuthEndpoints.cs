@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using ConsoleMatch.Core;
 using DatingApp.Api.Auth;
 using DatingApp.Api.Data;
@@ -16,13 +17,14 @@ public static class AuthEndpoints
         var group = app.MapGroup("/auth").WithTags("Auth").RequireRateLimiting("auth");
 
         group.MapPost("/register", async (
-            RegisterRequest req, AppDbContext db, TokenService tokens, PasswordHasher<User> hasher) =>
+            RegisterRequest req, AppDbContext db, TokenService tokens, PasswordHasher<User> hasher,
+            AdminOptions admins) =>
         {
             if (string.IsNullOrWhiteSpace(req.Email) || !req.Email.Contains('@'))
                 return Results.BadRequest(new { error = "A valid email is required." });
 
-            if (req.Password.Length < 8)
-                return Results.BadRequest(new { error = "Password must be at least 8 characters." });
+            if (PasswordProblem(req.Password) is { } problem)
+                return Results.BadRequest(new { error = problem });
 
             if (string.IsNullOrWhiteSpace(req.DisplayName))
                 return Results.BadRequest(new { error = "Display name is required." });
@@ -51,11 +53,10 @@ public static class AuthEndpoints
             user.MaxAge = Math.Clamp(req.MaxAge ?? 99, user.MinAge, 120);
             user.MaxDistanceKm = Math.Clamp(req.MaxDistanceKm ?? 50, 1, 20_000);
             user.PasswordHash = hasher.HashPassword(user, req.Password);
+            user.IsAdmin = admins.IsAdminEmail(email);
 
             db.Users.Add(user);
-            await db.SaveChangesAsync();
-
-            return Results.Ok(new AuthResponse(tokens.Issue(user), user.Id, user.DisplayName));
+            return Results.Ok(await tokens.IssueSessionAsync(db, user));
         });
 
         group.MapPost("/login", async (
@@ -73,13 +74,99 @@ public static class AuthEndpoints
             if (result == PasswordVerificationResult.Failed)
                 return Results.Json(new { error = "Invalid email or password." }, statusCode: 401);
 
+            // Checked only after the password, so a ban never confirms an account to a guesser.
+            if (user.IsBanned)
+                return Results.Json(new { error = "This account has been suspended." }, statusCode: 403);
+
             if (result == PasswordVerificationResult.SuccessRehashNeeded)
-            {
                 user.PasswordHash = hasher.HashPassword(user, req.Password!);
-                await db.SaveChangesAsync();
+
+            return Results.Ok(await tokens.IssueSessionAsync(db, user));
+        });
+
+        // Changing the password signs out every other session, then hands this one fresh tokens.
+        group.MapPost("/change-password", async (
+            ChangePasswordRequest req, ClaimsPrincipal principal, AppDbContext db, TokenService tokens,
+            PasswordHasher<User> hasher) =>
+        {
+            var user = await db.Users.FirstOrDefaultAsync(u => u.Id == principal.UserId());
+            if (user is null) return Results.NotFound();
+
+            if (hasher.VerifyHashedPassword(user, user.PasswordHash, req.CurrentPassword ?? "")
+                == PasswordVerificationResult.Failed)
+                return Results.BadRequest(new { error = "Current password is incorrect." });
+
+            if (PasswordProblem(req.NewPassword) is { } problem)
+                return Results.BadRequest(new { error = problem });
+
+            user.PasswordHash = hasher.HashPassword(user, req.NewPassword);
+            user.TokenVersion++;
+            await TokenService.RevokeAllAsync(db, user.Id);
+            return Results.Ok(await tokens.IssueSessionAsync(db, user));
+        }).RequireAuthorization();
+
+        // Refresh and logout present a 256-bit random token, not a guessable password, so they
+        // sit outside the tight per-IP auth bucket; the global limiter still applies.
+        var session = app.MapGroup("/auth").WithTags("Auth");
+
+        session.MapPost("/refresh", async (RefreshRequest req, AppDbContext db, TokenService tokens) =>
+        {
+            var hash = TokenService.Hash(req.RefreshToken ?? "");
+            var stored = await db.RefreshTokens.Include(t => t.User)
+                .FirstOrDefaultAsync(t => t.TokenHash == hash);
+
+            var invalid = Results.Json(new { error = "Session expired. Please sign in again." }, statusCode: 401);
+            if (stored?.User is null) return invalid;
+
+            var now = DateTimeOffset.UtcNow;
+            if (stored.RevokedAt is { } revokedAt)
+            {
+                // A rotated token presented again outside the grace window means two parties
+                // hold the same session: one of them stole it. Kill the whole chain.
+                if (!stored.Rotated || now - revokedAt > tokens.RotationGrace)
+                {
+                    foreach (var t in await db.RefreshTokens.Where(t => t.FamilyId == stored.FamilyId).ToListAsync())
+                        t.RevokedAt ??= now;
+                    await db.SaveChangesAsync();
+                }
+                return invalid;
             }
 
-            return Results.Ok(new AuthResponse(tokens.Issue(user), user.Id, user.DisplayName));
+            if (stored.ExpiresAt <= now || stored.User.IsBanned) return invalid;
+
+            stored.RevokedAt = now;
+            stored.Rotated = true;
+            return Results.Ok(await tokens.IssueSessionAsync(db, stored.User, stored.FamilyId));
         });
+
+        // Ends this device's session. Idempotent, and silent about unknown tokens.
+        session.MapPost("/logout", async (RefreshRequest req, AppDbContext db) =>
+        {
+            var hash = TokenService.Hash(req.RefreshToken ?? "");
+            var stored = await db.RefreshTokens.FirstOrDefaultAsync(t => t.TokenHash == hash);
+            if (stored is not null)
+            {
+                var now = DateTimeOffset.UtcNow;
+                foreach (var t in await db.RefreshTokens.Where(t => t.FamilyId == stored.FamilyId).ToListAsync())
+                    t.RevokedAt ??= now;
+                await db.SaveChangesAsync();
+            }
+            return Results.Ok(new { loggedOut = true });
+        });
+
+        // Ends every session, including access tokens already handed out.
+        session.MapPost("/logout-all", async (ClaimsPrincipal principal, AppDbContext db) =>
+        {
+            var user = await db.Users.FirstOrDefaultAsync(u => u.Id == principal.UserId());
+            if (user is null) return Results.NotFound();
+
+            user.TokenVersion++;
+            await TokenService.RevokeAllAsync(db, user.Id);
+            await db.SaveChangesAsync();
+            return Results.Ok(new { loggedOut = true });
+        }).RequireAuthorization();
     }
+
+    private static string? PasswordProblem(string? password) =>
+        (password ?? "").Length < 8 ? "Password must be at least 8 characters." : null;
 }

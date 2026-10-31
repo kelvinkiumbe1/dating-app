@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using ConsoleMatch.Core;
 using DatingApp.Api.Data;
+using DatingApp.Api.Realtime;
 using Microsoft.EntityFrameworkCore;
 
 namespace DatingApp.Api.Endpoints;
@@ -61,7 +62,7 @@ public static class MatchEndpoints
         });
 
         group.MapGet("/{matchId:guid}/messages", async (
-            Guid matchId, ClaimsPrincipal principal, AppDbContext db) =>
+            Guid matchId, ClaimsPrincipal principal, AppDbContext db, RealtimeNotifier realtime) =>
         {
             var meId = principal.UserId();
             var match = await db.Matches.FirstOrDefaultAsync(m => m.Id == matchId);
@@ -79,6 +80,7 @@ public static class MatchEndpoints
             {
                 foreach (var m in unread) m.ReadAt = now;
                 await db.SaveChangesAsync();
+                await realtime.ThreadRead(match, meId, now);
             }
 
             return Results.Ok(thread
@@ -87,7 +89,8 @@ public static class MatchEndpoints
         });
 
         group.MapPost("/{matchId:guid}/messages", async (
-            Guid matchId, SendMessageRequest req, ClaimsPrincipal principal, AppDbContext db) =>
+            Guid matchId, SendMessageRequest req, ClaimsPrincipal principal, AppDbContext db,
+            RealtimeNotifier realtime) =>
         {
             var meId = principal.UserId();
 
@@ -114,21 +117,25 @@ public static class MatchEndpoints
             db.Messages.Add(message);
             await db.SaveChangesAsync();
 
-            return Results.Ok(new MessageResponse(
-                message.Id, message.SenderId, message.Body, message.SentAt, message.ReadAt));
+            var response = new MessageResponse(
+                message.Id, message.SenderId, message.Body, message.SentAt, message.ReadAt);
+            await realtime.MessageSent(match, response);
+            return Results.Ok(response);
         });
 
         // Unmatch: deactivates the match for both sides and keeps the swipes on record
         // so neither person resurfaces in the other's deck.
         group.MapDelete("/{matchId:guid}", async (
-            Guid matchId, ClaimsPrincipal principal, AppDbContext db) =>
+            Guid matchId, ClaimsPrincipal principal, AppDbContext db, RealtimeNotifier realtime) =>
         {
             var meId = principal.UserId();
             var match = await db.Matches.FirstOrDefaultAsync(m => m.Id == matchId);
             if (match is null || !match.Includes(meId)) return Results.NotFound();
 
+            var wasActive = match.IsActive;
             match.IsActive = false;
             await db.SaveChangesAsync();
+            if (wasActive) await realtime.Unmatched(match);
             return Results.Ok(new { unmatched = true });
         });
     }

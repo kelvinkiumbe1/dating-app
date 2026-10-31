@@ -112,8 +112,8 @@ public class AuthTests : IClassFixture<ApiFactory>
         var deleted = await user.Client.DeleteAsync("/me");
         deleted.EnsureSuccessStatusCode();
 
-        // The old token now points at nothing, and the credentials no longer work.
-        Assert.Equal(HttpStatusCode.NotFound, (await user.Client.GetAsync("/me")).StatusCode);
+        // The old token is rejected outright, and the credentials no longer work.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await user.Client.GetAsync("/me")).StatusCode);
 
         var login = await _api.CreateClient()
             .PostAsJsonAsync("/auth/login", new LoginRequest(email, "correct-horse-battery"));

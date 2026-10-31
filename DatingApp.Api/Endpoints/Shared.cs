@@ -26,7 +26,7 @@ public static class Shared
         u.Id, u.Email, u.DisplayName, u.Age, u.DateOfBirth, u.Gender, u.Bio,
         Compatibility.ParseList(u.Interests), u.Latitude, u.Longitude,
         Compatibility.ParseList(u.SeekingGenders), u.MinAge, u.MaxAge, u.MaxDistanceKm,
-        u.IsDiscoverable, u.PhotoUrls());
+        u.IsDiscoverable, u.PhotoUrls(), u.IsAdmin);
 
     /// Empty preference list means "any gender".
     public static bool GenderMatches(string seekingCsv, string gender)

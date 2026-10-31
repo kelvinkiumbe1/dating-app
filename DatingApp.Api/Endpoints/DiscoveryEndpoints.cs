@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using ConsoleMatch.Core;
 using DatingApp.Api.Data;
+using DatingApp.Api.Realtime;
 using Microsoft.EntityFrameworkCore;
 
 namespace DatingApp.Api.Endpoints;
@@ -27,7 +28,7 @@ public static class DiscoveryEndpoints
             var excluded = alreadySwiped.Concat(blockedEitherWay).Append(meId).ToHashSet();
 
             var pool = await db.Users.Include(u => u.Photos)
-                .Where(u => u.IsDiscoverable && !excluded.Contains(u.Id))
+                .Where(u => u.IsDiscoverable && !u.IsBanned && !excluded.Contains(u.Id))
                 .ToListAsync();
 
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
@@ -67,7 +68,8 @@ public static class DiscoveryEndpoints
         }).RequireAuthorization().WithTags("Discovery");
 
         // A swipe. A match is created only when the other person already liked you.
-        app.MapPost("/swipes", async (SwipeRequest req, ClaimsPrincipal principal, AppDbContext db) =>
+        app.MapPost("/swipes", async (
+            SwipeRequest req, ClaimsPrincipal principal, AppDbContext db, RealtimeNotifier realtime) =>
         {
             var meId = principal.UserId();
             if (req.TargetId == meId)
@@ -114,6 +116,11 @@ public static class DiscoveryEndpoints
             }
 
             await db.SaveChangesAsync();
+
+            // The swiper learns from this response; the other person hears about it live.
+            var me = await db.Users.Include(u => u.Photos).FirstAsync(u => u.Id == meId);
+            await realtime.Matched(req.TargetId, match, me);
+
             return Results.Ok(new SwipeResponse(true, match.Id, "It's a match!"));
         }).RequireAuthorization().WithTags("Discovery");
 
@@ -137,7 +144,7 @@ public static class DiscoveryEndpoints
                 .Select(s => s.SwiperId).ToListAsync();
 
             var admirers = await db.Users.Include(u => u.Photos)
-                .Where(u => admirerIds.Contains(u.Id)).ToListAsync();
+                .Where(u => admirerIds.Contains(u.Id) && !u.IsBanned).ToListAsync();
 
             return Results.Ok(admirers.Select(u => u.ToPublicProfile()).ToList());
         }).RequireAuthorization().WithTags("Discovery");

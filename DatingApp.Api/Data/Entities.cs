@@ -28,6 +28,15 @@ public class User
 
     public bool IsDiscoverable { get; set; } = true;
 
+    // Security
+    /// Embedded in every access token; bumping it invalidates all outstanding tokens at once
+    /// (sign out everywhere, password change, ban).
+    public int TokenVersion { get; set; }
+    public bool IsAdmin { get; set; }
+    public bool IsBanned { get; set; }
+    public DateTimeOffset? BannedAt { get; set; }
+    public string? BanReason { get; set; }
+
     public List<Photo> Photos { get; set; } = new();
 
     public int Age => AgeOn(DateOnly.FromDateTime(DateTime.UtcNow));
@@ -107,4 +116,24 @@ public class Report
     public string? Details { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public bool Reviewed { get; set; }
+    public DateTimeOffset? ReviewedAt { get; set; }
+    public Guid? ReviewedById { get; set; }
+    public string? Resolution { get; set; }         // "dismissed" or "banned"
+    public string? ModeratorNote { get; set; }
+}
+
+/// A long-lived credential exchanged for short-lived access tokens. Only the SHA-256 of the
+/// token is stored, so a database leak does not hand out sessions. Each refresh rotates the
+/// token; the rotated tokens share a FamilyId so replaying an old one can revoke the chain.
+public class RefreshToken
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid UserId { get; set; }
+    public User? User { get; set; }
+    public string TokenHash { get; set; } = "";
+    public Guid FamilyId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? RevokedAt { get; set; }
+    public bool Rotated { get; set; }              // revoked by being exchanged, not by logout
 }

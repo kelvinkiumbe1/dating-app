@@ -26,3 +26,7 @@ uploads/
 ## Secrets
 .env
 *.env.local
+
+## Web client build output (built from web/ by `npm run build` or the Dockerfile)
+DatingApp.Api/wwwroot/app/
+web/node_modules/
