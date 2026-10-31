@@ -52,7 +52,17 @@ public static class PhotoEndpoints
 
             if (!LooksLikeDeclaredImage(buffer, file.ContentType!))
                 return Results.BadRequest(new { error = "File contents do not match the declared image type." });
-            buffer.Position = 0;
+
+            // EXIF and friends routinely carry GPS coordinates; they never reach storage.
+            byte[] clean;
+            try
+            {
+                clean = ImageMetadata.Strip(buffer.GetBuffer().AsSpan(0, (int)buffer.Length), file.ContentType!);
+            }
+            catch (InvalidImageException ex)
+            {
+                return Results.BadRequest(new { error = $"Could not read image: {ex.Message}" });
+            }
 
             var photo = new Photo
             {
@@ -63,7 +73,8 @@ public static class PhotoEndpoints
             // Key is server-generated — a client-supplied filename never reaches storage.
             photo.FileName = $"{photo.Id}{extension}";
 
-            await storage.SaveAsync(photo.FileName, buffer, photo.ContentType);
+            using (var cleanStream = new MemoryStream(clean, writable: false))
+                await storage.SaveAsync(photo.FileName, cleanStream, photo.ContentType);
 
             db.Photos.Add(photo);
             await db.SaveChangesAsync();

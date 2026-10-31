@@ -11,6 +11,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<Block> Blocks => Set<Block>();
     public DbSet<Report> Reports => Set<Report>();
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -36,5 +37,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         b.Entity<Message>().HasIndex(m => new { m.MatchId, m.SentAt });
 
         b.Entity<Block>().HasIndex(x => new { x.BlockerId, x.BlockedId }).IsUnique();
+
+        b.Entity<Report>().HasIndex(r => new { r.Reviewed, r.CreatedAt });
+
+        b.Entity<RefreshToken>(e =>
+        {
+            e.HasIndex(t => t.TokenHash).IsUnique();
+            e.HasIndex(t => t.FamilyId);
+            e.HasOne(t => t.User).WithMany()
+                .HasForeignKey(t => t.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
     }
 }

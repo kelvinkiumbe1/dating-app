@@ -2,11 +2,13 @@ using System.Threading.RateLimiting;
 using DatingApp.Api.Auth;
 using DatingApp.Api.Data;
 using DatingApp.Api.Endpoints;
+using DatingApp.Api.Realtime;
 using DatingApp.Api.Storage;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
@@ -79,6 +81,10 @@ var tokenService = new TokenService(jwt);
 builder.Services.AddSingleton(jwt);
 builder.Services.AddSingleton(tokenService);
 
+var admins = new AdminOptions();
+builder.Configuration.GetSection("Admin").Bind(admins);
+builder.Services.AddSingleton(admins);
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -95,9 +101,55 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             NameClaimType = "sub",   // keep "sub" rather than remapping to a legacy claim type
         };
         options.MapInboundClaims = false;
+
+        options.Events = new JwtBearerEvents
+        {
+            // Browsers cannot set headers on a WebSocket upgrade, so the SignalR client sends
+            // the token as a query parameter. Accepted only on the hub path.
+            OnMessageReceived = context =>
+            {
+                var token = context.Request.Query["access_token"];
+                if (!string.IsNullOrEmpty(token) && context.HttpContext.Request.Path.StartsWithSegments("/hubs"))
+                    context.Token = token;
+                return Task.CompletedTask;
+            },
+
+            // A valid signature is not enough: the account must still exist, not be banned,
+            // and not have revoked its tokens since this one was issued. This one primary-key
+            // lookup is what makes "sign out everywhere" and bans take effect immediately.
+            OnTokenValidated = async context =>
+            {
+                var principal = context.Principal!;
+                var db = context.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var userId = principal.UserId();
+                var account = await db.Users.AsNoTracking()
+                    .Where(u => u.Id == userId)
+                    .Select(u => new { u.TokenVersion, u.IsBanned, u.IsAdmin })
+                    .FirstOrDefaultAsync();
+
+                if (account is null || account.IsBanned
+                    || principal.FindFirst(CustomClaims.TokenVersion)?.Value != account.TokenVersion.ToString())
+                {
+                    context.Fail("Token has been revoked.");
+                    return;
+                }
+
+                if (account.IsAdmin)
+                    ((System.Security.Claims.ClaimsIdentity)principal.Identity!).AddClaim(
+                        new System.Security.Claims.Claim(CustomClaims.Role, CustomClaims.AdminRole));
+            },
+        };
     });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy(AdminEndpoints.Policy, policy => policy
+        .RequireAuthenticatedUser()
+        .RequireClaim(CustomClaims.Role, CustomClaims.AdminRole));
+
+// ── Realtime ────────────────────────────────────────────────────────────────
+builder.Services.AddSignalR();
+builder.Services.AddSingleton<IUserIdProvider, SubjectUserIdProvider>();
+builder.Services.AddSingleton<RealtimeNotifier>();
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 // Allowed origins are explicit: a credentialed API must never use AllowAnyOrigin.
@@ -105,7 +157,8 @@ var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
 {
     if (allowedOrigins.Length > 0)
-        policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod();
+        // AllowCredentials is what lets the SignalR client negotiate cross-origin.
+        policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials();
 }));
 
 // ── Rate limiting ───────────────────────────────────────────────────────────
@@ -145,6 +198,17 @@ using (var scope = app.Services.CreateScope())
         db.Database.Migrate();          // versioned migrations in production
     else
         db.Database.EnsureCreated();    // SQLite dev/test databases are disposable
+
+    // `dotnet run --project DatingApp.Api -- --seed` fills a development database with
+    // demo accounts. Refused outside Development so it can never touch real data.
+    if (args.Contains("--seed"))
+    {
+        if (!app.Environment.IsDevelopment())
+            throw new InvalidOperationException("--seed only runs in Development.");
+        await DemoSeed.RunAsync(db, scope.ServiceProvider.GetRequiredService<PasswordHasher<User>>());
+    }
+
+    await admins.SyncAsync(db);
 }
 
 // Fly.io, Render, and Railway all terminate TLS at their proxy, so the scheme and
@@ -153,7 +217,7 @@ using (var scope = app.Services.CreateScope())
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
-    KnownNetworks = { },
+    KnownIPNetworks = { },
     KnownProxies = { },
 });
 
@@ -163,12 +227,36 @@ if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
+app.Use(async (context, next) =>
+{
+    var headers = context.Response.Headers;
+    headers.XContentTypeOptions = "nosniff";
+    headers["Referrer-Policy"] = "no-referrer";
+    headers.XFrameOptions = "DENY";
+    // The bundled web client uses no inline scripts and talks only to this origin.
+    headers.ContentSecurityPolicy =
+        "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
+        + "connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+    await next();
+});
+
+// The web client is built into wwwroot/app (see web/). Served under /app so its routes can
+// never collide with API paths like /matches or /likes on a page refresh.
+app.UseStaticFiles();
+// Explicit, so routing (and the SPA fallback) runs after static files. Left implicit,
+// minimal hosting routes first and the fallback would answer asset requests with index.html.
+app.UseRouting();
+
 app.UseCors();
-app.UseRateLimiter();
+// Authentication runs before the limiter so the global bucket can partition by user
+// rather than lumping every signed-in user behind one NAT into a single IP bucket.
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
 
 app.MapHealthChecks("/health").WithTags("Meta");
+app.MapGet("/", () => Results.Redirect("/app/")).ExcludeFromDescription();
+app.MapFallbackToFile("/app/{**path}", "app/index.html");
 
 app.MapAuthEndpoints();
 app.MapProfileEndpoints();
@@ -176,6 +264,11 @@ app.MapDiscoveryEndpoints();
 app.MapMatchEndpoints();
 app.MapSafetyEndpoints();
 app.MapPhotoEndpoints();
+app.MapAdminEndpoints();
+
+// Closing on expiry forces the client to reconnect with a fresh access token, so a revoked
+// session loses its live connection within one token lifetime.
+app.MapHub<ChatHub>("/hubs/chat", options => options.CloseOnAuthenticationExpiration = true);
 
 app.Run();
 

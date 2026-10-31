@@ -12,3 +12,5 @@
 ConsoleApp1/
 ConsoleApp1.Tests/
 DatingApp.Api.Tests/
+**/node_modules/
+DatingApp.Api/wwwroot/app/

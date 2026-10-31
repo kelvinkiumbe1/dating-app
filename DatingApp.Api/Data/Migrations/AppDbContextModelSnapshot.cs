@@ -17,7 +17,7 @@ namespace DatingApp.Api.Data.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.10")
+                .HasAnnotation("ProductVersion", "10.0.14")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -130,6 +130,46 @@ namespace DatingApp.Api.Data.Migrations
                     b.ToTable("Photos");
                 });
 
+            modelBuilder.Entity("DatingApp.Api.Data.RefreshToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("FamilyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("Rotated")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FamilyId");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("RefreshTokens");
+                });
+
             modelBuilder.Entity("DatingApp.Api.Data.Report", b =>
                 {
                     b.Property<Guid>("Id")
@@ -142,6 +182,9 @@ namespace DatingApp.Api.Data.Migrations
                     b.Property<string>("Details")
                         .HasColumnType("text");
 
+                    b.Property<string>("ModeratorNote")
+                        .HasColumnType("text");
+
                     b.Property<string>("Reason")
                         .IsRequired()
                         .HasColumnType("text");
@@ -152,10 +195,21 @@ namespace DatingApp.Api.Data.Migrations
                     b.Property<Guid>("ReporterId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Resolution")
+                        .HasColumnType("text");
+
                     b.Property<bool>("Reviewed")
                         .HasColumnType("boolean");
 
+                    b.Property<DateTimeOffset?>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ReviewedById")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("Reviewed", "CreatedAt");
 
                     b.ToTable("Reports");
                 });
@@ -192,6 +246,12 @@ namespace DatingApp.Api.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("BanReason")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("BannedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("Bio")
                         .IsRequired()
                         .HasColumnType("text");
@@ -217,6 +277,12 @@ namespace DatingApp.Api.Data.Migrations
                     b.Property<string>("Interests")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<bool>("IsAdmin")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsBanned")
+                        .HasColumnType("boolean");
 
                     b.Property<bool>("IsDiscoverable")
                         .HasColumnType("boolean");
@@ -244,6 +310,9 @@ namespace DatingApp.Api.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<int>("TokenVersion")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Email")
@@ -267,6 +336,17 @@ namespace DatingApp.Api.Data.Migrations
                 {
                     b.HasOne("DatingApp.Api.Data.User", "User")
                         .WithMany("Photos")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("DatingApp.Api.Data.RefreshToken", b =>
+                {
+                    b.HasOne("DatingApp.Api.Data.User", "User")
+                        .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

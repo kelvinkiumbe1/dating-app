@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using DatingApp.Api.Data;
+using DatingApp.Api.Realtime;
 using Microsoft.EntityFrameworkCore;
 
 namespace DatingApp.Api.Endpoints;
@@ -19,7 +20,7 @@ public static class SafetyEndpoints
         // Blocking is mutual in effect: neither user can see, swipe, or message the other,
         // and any existing match is deactivated immediately.
         group.MapPost("/block/{userId:guid}", async (
-            Guid userId, ClaimsPrincipal principal, AppDbContext db) =>
+            Guid userId, ClaimsPrincipal principal, AppDbContext db, RealtimeNotifier realtime) =>
         {
             var meId = principal.UserId();
             if (userId == meId) return Results.BadRequest(new { error = "You cannot block yourself." });
@@ -30,6 +31,7 @@ public static class SafetyEndpoints
 
             var (a, b2) = Match.Order(meId, userId);
             var match = await db.Matches.FirstOrDefaultAsync(m => m.UserAId == a && m.UserBId == b2);
+            var endedMatch = match is { IsActive: true } ? match : null;
             if (match is not null) match.IsActive = false;
 
             // Record a pass in both directions so neither reappears in the other's deck.
@@ -44,6 +46,7 @@ public static class SafetyEndpoints
             }
 
             await db.SaveChangesAsync();
+            if (endedMatch is not null) await realtime.Unmatched(endedMatch);
             return Results.Ok(new { blocked = true });
         });
 
